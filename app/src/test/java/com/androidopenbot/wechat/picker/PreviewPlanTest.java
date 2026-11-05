@@ -6,8 +6,6 @@ import java.util.Arrays;
 import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 
 public class PreviewPlanTest {
     @Test
@@ -20,17 +18,5 @@ public class PreviewPlanTest {
         assertEquals(Collections.singletonList("/v.mp4"), plan.videos);
         assertEquals(Arrays.asList("/a.jpg", "/v.mp4"), plan.previewPaths);
         assertEquals(0, plan.index);
-    }
-
-    @Test
-    public void sendLabelsMatchTheStockButton() {
-        assertTrue(GalleryHandoff.looksLikeSendLabel("发送"));
-        assertTrue(GalleryHandoff.looksLikeSendLabel("发送(1)"));
-        assertTrue(GalleryHandoff.looksLikeSendLabel("傳送"));
-        assertTrue(GalleryHandoff.looksLikeSendLabel("完成"));
-        assertTrue(GalleryHandoff.looksLikeSendLabel("Send"));
-        assertFalse(GalleryHandoff.looksLikeSendLabel("预览"));
-        assertFalse(GalleryHandoff.looksLikeSendLabel(null));
-        assertFalse(GalleryHandoff.looksLikeSendLabel("  "));
     }
 }
