@@ -5,21 +5,14 @@ import android.os.Build;
 
 import org.luckypray.dexkit.DexKitBridge;
 import org.luckypray.dexkit.query.FindClass;
-import org.luckypray.dexkit.query.FindMethod;
 import org.luckypray.dexkit.query.enums.StringMatchType;
 import org.luckypray.dexkit.query.matchers.ClassMatcher;
-import org.luckypray.dexkit.query.matchers.MethodMatcher;
 import org.luckypray.dexkit.result.ClassData;
-import org.luckypray.dexkit.result.MethodData;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -60,49 +53,6 @@ public final class DexKitGalleryFinder {
         } catch (Throwable t) {
             Logx.i("dexkit discover failed: " + t);
         }
-    }
-
-    /**
-     * Methods under the gallery UI package whose body references {@code usingString}.
-     * Used to find AlbumPreviewUI / ImagePreviewUI confirm handlers without a pinned name.
-     */
-    public static List<Method> findMethodsUsing(Context context, String usingString) {
-        if (context == null || usingString == null) {
-            return Collections.emptyList();
-        }
-        try {
-            loadNative(context);
-        } catch (Throwable t) {
-            Logx.i("libdexkit load failed: " + t);
-            return Collections.emptyList();
-        }
-        ClassLoader loader = context.getClassLoader();
-        String apk = context.getApplicationInfo().sourceDir;
-        List<Method> methods = new ArrayList<>();
-        try (DexKitBridge bridge = DexKitBridge.create(apk)) {
-            for (MethodData data : bridge.findMethod(FindMethod.create()
-                    .searchPackages("com.tencent.mm.plugin.gallery.ui")
-                    .matcher(MethodMatcher.create().usingStrings(usingString)))) {
-                String className = data.getClassName();
-                if (className == null
-                        || (!className.contains("AlbumPreviewUI") && !className.contains("ImagePreviewUI"))) {
-                    continue;
-                }
-                try {
-                    Method method = data.getMethodInstance(loader);
-                    methods.add(method);
-                    Logx.i("dexkit handoff method " + className + "#" + data.getMethodName()
-                            + " params=" + data.getParamCount()
-                            + " ret=" + data.getReturnTypeName());
-                } catch (Throwable t) {
-                    Logx.i("dexkit method bind failed " + className + "#" + data.getMethodName() + ": " + t);
-                }
-            }
-        } catch (Throwable t) {
-            Logx.i("dexkit method scan failed: " + t);
-            return Collections.emptyList();
-        }
-        return methods;
     }
 
     private static int collect(Set<String> into, Iterable<ClassData> classes) {
