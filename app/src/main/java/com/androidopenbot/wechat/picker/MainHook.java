@@ -3,6 +3,7 @@ package com.androidopenbot.wechat.picker;
 import android.app.Activity;
 import android.app.Application;
 import android.app.Instrumentation;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
@@ -29,7 +30,7 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
- * Replaces WeChat's album picker with the system photo picker, then hands back
+ * Replaces WeChat's album picker with Google Photos' external picker, then hands back
  * ordinary file paths in the extras WeChat already reads.
  */
 public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
@@ -125,17 +126,80 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             return;
         }
         LaunchOptions launch = LaunchOptionsReader.fromIntent(intent, prefs.forceRaw);
-        Intent picker = SystemPickerIntents.build(activity, launch);
-        if (picker == null) {
+        Intent photos = SystemPickerIntents.build(activity, launch);
+        if (photos == null) {
             return;
         }
         remember(activity, requestCode, new Pending(launch, false));
-        param.args[intentIndex] = picker;
-        Logx.i("replaced " + className
-                + " rc=" + requestCode
-                + " max=" + launch.maxCount
-                + " media=" + launch.mediaType
-                + " raw=" + launch.sendRaw);
+        int started = launchPhotos(param, intentIndex, photos);
+        if (started == LAUNCH_OK) {
+            Logx.i("replaced " + className
+                    + " with Google Photos ExternalPicker"
+                    + " rc=" + requestCode
+                    + " max=" + launch.maxCount
+                    + " media=" + launch.mediaType
+                    + " raw=" + launch.sendRaw);
+            return;
+        }
+        if (started == LAUNCH_ERROR) {
+            take(activity, requestCode);
+            return;
+        }
+        Intent hyper = SystemPickerIntents.buildHyperFallback(activity, launch);
+        if (hyper == null) {
+            take(activity, requestCode);
+            Logx.i("Google Photos ExternalPicker failed and no Hyper fallback is available");
+            return;
+        }
+        param.args[intentIndex] = hyper;
+        Logx.i("Google Photos ExternalPicker unavailable, falling back to ACTION_PICK_IMAGES"
+                + " rc=" + requestCode);
+    }
+
+    private static final int LAUNCH_OK = 0;
+    private static final int LAUNCH_FALLBACK = 1;
+    private static final int LAUNCH_ERROR = 2;
+
+    /**
+     * Starts the Photos intent through the original {@code execStartActivity}.
+     * On success the original call is skipped so the album activity is not also opened.
+     * Package visibility inside WeChat often hides Google Photos from {@code resolveActivity},
+     * so a failed lookup must not be treated as "Photos is missing" — only a real start failure
+     * falls through to Hyper.
+     */
+    private int launchPhotos(XC_MethodHook.MethodHookParam param, int intentIndex, Intent photos) {
+        Object[] args = param.args.clone();
+        args[intentIndex] = photos;
+        try {
+            Object result = XposedBridge.invokeOriginalMethod(param.method, param.thisObject, args);
+            param.setResult(result);
+            return LAUNCH_OK;
+        } catch (Throwable t) {
+            Throwable missing = activityMissing(t);
+            if (missing != null) {
+                Logx.i("Google Photos ExternalPicker failed: " + missing);
+                return LAUNCH_FALLBACK;
+            }
+            Throwable cause = t.getCause() != null ? t.getCause() : t;
+            Logx.i("Google Photos ExternalPicker error: " + cause);
+            param.setThrowable(cause);
+            return LAUNCH_ERROR;
+        }
+    }
+
+    private static Throwable activityMissing(Throwable t) {
+        Throwable current = t;
+        while (current != null) {
+            if (current instanceof ActivityNotFoundException || current instanceof SecurityException) {
+                return current;
+            }
+            Throwable next = current.getCause();
+            if (next == null || next == current) {
+                return null;
+            }
+            current = next;
+        }
+        return null;
     }
 
     private void hookDispatchResult() {
@@ -243,6 +307,10 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         } catch (Throwable t) {
             Logx.i("import crashed: " + t);
             imported = new ArrayList<>();
+        }
+        if (job.launch.maxCount > 0 && imported.size() > job.launch.maxCount) {
+            Logx.i("trimming selection " + imported.size() + " to max " + job.launch.maxCount);
+            imported = new ArrayList<>(imported.subList(0, job.launch.maxCount));
         }
         int videos = 0;
         int images = 0;
@@ -376,19 +444,31 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
     private void launchFromButton(Activity activity) {
         ModulePrefs prefs = ModulePrefs.load();
         LaunchOptions launch = LaunchOptionsReader.fromIntent(activity.getIntent(), prefs.forceRaw);
-        Intent picker = SystemPickerIntents.build(activity, launch);
-        if (picker == null) {
-            toast(activity, "這台手機沒有系統相片選擇器");
+        Intent photos = SystemPickerIntents.build(activity, launch);
+        remember(activity, INJECT_RC, new Pending(launch, true));
+        if (startForResult(activity, photos)) {
+            Logx.i("button launched Google Photos external picker");
             return;
         }
-        remember(activity, INJECT_RC, new Pending(launch, true));
+        Intent hyper = SystemPickerIntents.buildHyperFallback(activity, launch);
+        if (hyper != null && startForResult(activity, hyper)) {
+            Logx.i("button fell back to Hyper ACTION_PICK_IMAGES");
+            return;
+        }
+        take(activity, INJECT_RC);
+        toast(activity, "無法開啟 Google 相簿");
+    }
+
+    private static boolean startForResult(Activity activity, Intent picker) {
+        if (activity == null || picker == null) {
+            return false;
+        }
         try {
             activity.startActivityForResult(picker, INJECT_RC);
-            Logx.i("button launched system picker");
+            return true;
         } catch (Throwable t) {
-            take(activity, INJECT_RC);
-            Logx.i("button launch failed: " + t);
-            toast(activity, "無法開啟系統相簿");
+            Logx.i("picker launch failed: " + t);
+            return false;
         }
     }
 

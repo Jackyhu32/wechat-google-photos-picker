@@ -25,7 +25,7 @@ public final class ImportOverlay {
         overlay.setClickable(true);
         overlay.setBackgroundColor(0xB31C1915);
         TextView label = new TextView(activity);
-        label.setText("正在匯入系統相簿的檔案…");
+        label.setText("正在匯入 Google 相簿的檔案…");
         label.setTextColor(Color.WHITE);
         label.setTextSize(16);
         label.setGravity(Gravity.CENTER);

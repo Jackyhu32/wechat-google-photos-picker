@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">微信系統相簿</string>
-    <string name="xposed_description">微信開啟內建相簿時改走 Android 系統相片選擇器，讓 Google 相簿的雲端照片可以選到。</string>
+    <string name="xposed_description">微信開啟內建相簿時直接開啟 Google 相簿選圖，選完再把檔案交給微信。</string>
     <string name="settings_kicker">LSPosed · 只作用於微信</string>
-    <string name="settings_title">用系統相簿選照片</string>
-    <string name="settings_body">微信自己的相簿只看得到手機裡已下載的檔案。這個模組在你打開微信相簿時改開系統 Photo Picker，Google 相簿裡尚未下載的雲端照片會出現在清單中，選完後再把檔案交給微信傳送。</string>
-    <string name="switch_replace">打開相簿時直接用系統選擇器</string>
-    <string name="switch_replace_hint">攔截 AlbumPreviewUI。聊天、朋友圈與大頭貼若是用這個畫面選圖，會改開系統相簿。</string>
-    <string name="switch_button">仍進入微信相簿時顯示「系統相簿」</string>
-    <string name="switch_button_hint">微信改版導致攔截失敗時，相簿底部會多一顆按鈕，點了一樣能選 Google 相簿。</string>
+    <string name="settings_title">用 Google 相簿選照片</string>
+    <string name="settings_body">大陸版 HyperOS 不允許把 Google 相簿設成系統相片選擇器的雲端媒體。這個模組在你打開微信相簿時直接開啟 Google 相簿的選圖畫面，選完後再把檔案交給微信傳送。</string>
+    <string name="switch_replace">打開相簿時直接用 Google 相簿</string>
+    <string name="switch_replace_hint">攔截 AlbumPreviewUI。聊天、朋友圈與大頭貼若是用這個畫面選圖，會改開 Google 相簿。打不開時才退回系統選擇器。</string>
+    <string name="switch_button">仍進入微信相簿時顯示「Google 相簿」</string>
+    <string name="switch_button_hint">微信改版導致攔截失敗時，相簿底部會多一顆按鈕，點了一樣開啟 Google 相簿。</string>
     <string name="switch_raw">回傳時標記為原圖</string>
     <string name="switch_raw_hint">略過微信相簿裡的「原圖」勾選。開啟後，結果會帶 send_raw_img，並把壓縮標記關掉。</string>
-    <string name="help_title">讓雲端照片出現</string>
-    <string name="help_body">1. 安裝並登入 Google 相簿，開啟備份。\n2. 在 LSPosed 啟用本模組，作用域只勾 com.tencent.mm，然後強制停止微信。\n3. 打開系統相片選擇器右上角選單，雲端媒體應用程式選 Google 相簿。\n4. 回到微信傳圖。選雲端項目時，系統會先下載，再由本模組複製到微信自己的檔案目錄。</string>
+    <string name="help_title">直接開啟 Google 相簿</string>
+    <string name="help_body">大陸版 HyperOS 會把系統相片選擇器的雲端媒體白名單改成小米相簿（com.miui.gallery），Google 相簿不會出現在 HyperMainActivity 裡。\n1. 安裝並登入 Google 相簿，開啟備份。\n2. 在 LSPosed 啟用本模組，作用域只勾 com.tencent.mm，然後強制停止微信。不要勾系統框架、Google 相簿或 com.android.photopicker。\n3. 在微信裡選照片。應出現 Google 相簿的選圖畫面，而不是 HyperOS 相片選擇器。選完後檔案會複製到微信自己的目錄。</string>
     <string name="status_ready">LSPosed 已接管設定檔。下次打開微信相簿就會套用，不必重開手機。</string>
     <string name="status_private">LSPosed 尚未接管設定檔。請先啟用模組並勾選微信，再重新打開這個頁面。在那之前，微信會使用預設：取代內建相簿，並顯示備用按鈕。</string>
 </resources>

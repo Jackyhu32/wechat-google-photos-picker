@@ -29,7 +29,7 @@ public final class AlbumButton {
         }
         TextView button = new TextView(activity);
         button.setId(ID);
-        button.setText("系統相簿");
+        button.setText("Google 相簿");
         button.setTextColor(Color.WHITE);
         button.setTextSize(15);
         button.setTypeface(Typeface.DEFAULT_BOLD);
@@ -43,7 +43,7 @@ public final class AlbumButton {
         button.setBackground(background);
         button.setElevation(dp(activity, 6));
         button.setOnClickListener(listener);
-        button.setContentDescription("系統相簿，含 Google 相簿雲端照片");
+        button.setContentDescription("Google 相簿");
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
