@@ -1,6 +1,6 @@
 # 微信系統相簿
 
-LSPosed / Xposed 模組。微信（`com.tencent.mm`）打開內建相簿時，**直接開啟 Google 相簿的選圖畫面**，而不是 HyperOS 系統相片選擇器。選完之後，模組仍把 `content://` 複製到微信自己的目錄，再用微信原本就在讀的 Intent extra 把路徑交回去。不做登入、不讀聊天、不改付款。
+LSPosed / Xposed 模組，套件名稱 `io.github.Jackyhu32.wechat.picker`。微信（`com.tencent.mm`）打開內建相簿時，**直接開啟 Google 相簿的選圖畫面**，而不是 HyperOS 系統相片選擇器。選完之後，模組仍把 `content://` 複製到微信自己的目錄，再用微信原本就在讀的 Intent extra 把路徑交回去。不做登入、不讀聊天、不改付款。
 
 目標機是 Redmi K100 Pro Max（HyperOS，大陸版），微信 **8.0.79（versionCode 3182）**，已安裝 Google 相簿。
 
@@ -99,7 +99,7 @@ DexKit `org.luckypray:dexkit:2.3.0`（LGPL-3.0）用來在微信 APK 裡找改�
 
 ## English
 
-LSPosed module, scoped only to `com.tencent.mm`. WeChat 8.0.79 opens `AlbumPreviewUI` with `startActivity` (`rc=-1`). The stock album stays on screen. The floating「Google 相簿」button launches Google Photos `ExternalPickerActivity` with `ACTION_GET_CONTENT` (`image/*` and/or `video/*` from `query_media_type`, `EXTRA_ALLOW_MULTIPLE` when multi-select). `ACTION_PICK_IMAGES` / `HyperMainActivity` runs only if that component fails to start.
+LSPosed module (`io.github.Jackyhu32.wechat.picker`), scoped only to `com.tencent.mm`. WeChat 8.0.79 opens `AlbumPreviewUI` with `startActivity` (`rc=-1`). The stock album stays on screen. The floating「Google 相簿」button launches Google Photos `ExternalPickerActivity` with `ACTION_GET_CONTENT` (`image/*` and/or `video/*` from `query_media_type`, `EXTRA_ALLOW_MULTIPLE` when multi-select). `ACTION_PICK_IMAGES` / `HyperMainActivity` runs only if that component fails to start.
 
 CN HyperOS rewrites `mediaprovider/allowed_cloud_providers` to `com.miui.gallery` via `com.miui.securitycenter`, so Google Photos cannot be the system picker's cloud provider. This module does not patch that whitelist and does not install an international gallery.
 
