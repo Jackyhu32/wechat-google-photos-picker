@@ -121,8 +121,17 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
         Activity activity = findActivity(param.args);
         int requestCode = requestCodeAfter(param.args, intentIndex);
-        if (activity == null || requestCode < 0) {
-            Logx.i("album start is not for-result (" + className + " rc=" + requestCode + "), leaving the screen up");
+        if (requestCode < 0) {
+            // 8.0.79 starts AlbumPreviewUI with startActivity (rc=-1). Replacing the Intent
+            // would drop the picker result. Mark the album so its own process opens Photos,
+            // then hand the files to WeChat's confirm / ImagePreviewUI path.
+            intent.putExtra(GalleryHandoff.EXTRA_AUTO_PHOTOS, true);
+            Logx.i("album start is not for-result (" + className + " rc=" + requestCode
+                    + "), marked AlbumPreviewUI to open Google Photos");
+            return;
+        }
+        if (activity == null) {
+            Logx.i("album start has no caller activity (" + className + " rc=" + requestCode + ")");
             return;
         }
         LaunchOptions launch = LaunchOptionsReader.fromIntent(intent, prefs.forceRaw);
@@ -337,7 +346,16 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         Map<String, Object> extras = WeChatResultContract.build(items, job.launch.sendRaw, job.launch.passthrough);
         Intent rewritten = extras == null ? null : ResultIntents.toIntent(extras);
         Logx.i("import done in " + (System.currentTimeMillis() - started) + "ms images=" + images + " videos=" + videos);
-        activity.runOnUiThread(() -> deliver(activity, job, rewritten, snapshot, method, resultSlot, intentSlot));
+        java.util.List<java.lang.reflect.Method> confirms = java.util.Collections.emptyList();
+        if (job.injected && rewritten != null) {
+            try {
+                confirms = GalleryHandoff.findConfirmMethods(activity);
+            } catch (Throwable t) {
+                Logx.i("confirm scan failed: " + t);
+            }
+        }
+        java.util.List<java.lang.reflect.Method> ready = confirms;
+        activity.runOnUiThread(() -> deliver(activity, job, rewritten, snapshot, method, resultSlot, intentSlot, ready));
     }
 
     private void deliver(
@@ -347,7 +365,8 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             Object[] snapshot,
             Member method,
             int resultSlot,
-            int intentSlot
+            int intentSlot,
+            java.util.List<java.lang.reflect.Method> confirms
     ) {
         try {
             ImportOverlay.hide(activity);
@@ -360,9 +379,8 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
                     toast(activity, "沒有匯入到可讀的照片或影片");
                     return;
                 }
-                activity.setResult(Activity.RESULT_OK, rewritten);
-                activity.finish();
-                Logx.i("album finished with system picker paths");
+                String how = GalleryHandoff.deliver(activity, rewritten, confirms);
+                Logx.i("delivery=" + how);
                 return;
             }
             if (resultSlot < 0 || intentSlot < 0) {
@@ -381,7 +399,7 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             BYPASS.set(Boolean.TRUE);
             try {
                 XposedBridge.invokeOriginalMethod(method, activity, replay);
-                Logx.i("replayed album result to " + activity.getClass().getName());
+                Logx.i("delivery=activity-result replayed album result to " + activity.getClass().getName());
             } catch (Throwable t) {
                 Logx.i("replay failed: " + t);
             } finally {
@@ -407,8 +425,20 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
                     if (activity == null) {
                         return;
                     }
+                    Activity resumed = activity;
                     try {
-                        maybeInject(activity);
+                        if (GalleryHandoff.consumePreviewSend(resumed)) {
+                            android.view.View decor = resumed.getWindow() == null
+                                    ? null : resumed.getWindow().getDecorView();
+                            if (decor != null) {
+                                java.util.List<java.lang.reflect.Method> confirms = GalleryHandoff.findConfirmMethods(resumed);
+                                decor.postDelayed(() -> {
+                                    String how = GalleryHandoff.finishPreview(resumed, confirms);
+                                    Logx.i("delivery=" + how);
+                                }, 400);
+                            }
+                        }
+                        maybeInject(resumed);
                     } catch (Throwable t) {
                         Logx.i("button inject error: " + t);
                     }
@@ -425,11 +455,18 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             return;
         }
         ModulePrefs prefs = ModulePrefs.load();
-        if (!prefs.showButton) {
-            AlbumButton.detach(activity);
+        if (activity.getWindow() == null) {
             return;
         }
-        if (activity.getWindow() == null) {
+        boolean autoPhotos = activity.getIntent() != null
+                && activity.getIntent().getBooleanExtra(GalleryHandoff.EXTRA_AUTO_PHOTOS, false);
+        if (autoPhotos) {
+            activity.getIntent().removeExtra(GalleryHandoff.EXTRA_AUTO_PHOTOS);
+            Logx.i("album intent keys=" + GalleryHandoff.extraKeys(activity.getIntent()));
+            activity.getWindow().getDecorView().post(() -> launchFromButton(activity));
+        }
+        if (!prefs.showButton) {
+            AlbumButton.detach(activity);
             return;
         }
         activity.getWindow().getDecorView().post(() -> {

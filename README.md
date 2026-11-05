@@ -37,8 +37,13 @@ adb shell am start \
 4. 在 `Activity.dispatchActivityResult` 收到結果後，於背景把 URI 複製到  
    `/storage/emulated/0/Android/data/com.tencent.mm/files/syspicker/`  
    （外接儲存不可用時改到微信 cache）。已經在共用儲存上的檔案直接沿用路徑。HEIC/HEIF 會轉成 JPEG。超過約 1.5GB 的檔案會略過。匯入仍走原來的 `MediaImporter` 與 `WeChatResultContract`。
-5. 把路徑放進結果 Intent，再把原本的 `dispatchActivityResult` 重播給呼叫端。圖片走 `CropImage_OutputPath_List`、`preview_image_list`、`CropImage_OutputPath`。影片走 `key_select_video_list`；只有一支影片、沒有圖片時另外帶 `K_SEGMENTVIDEOPATH`、`KSightPath`、`KSightThumbPath`、`sight_md5`。圖片加影片同時存在才帶 `key_select_mix_media_list`。同一份清單裡的重複路徑會去掉。
-6. 若攔截沒吃到（類名改了，或這次啟動不是 `startActivityForResult`），微信相簿底部會多一顆「Google 相簿」。點下去一樣開 Google 相簿外部選圖；打不開才退回系統選擇器。選完直接 `setResult` 並關閉相簿。
+5. 把路徑放進結果 Intent。圖片走 `CropImage_OutputPath_List`、`preview_image_list`、`CropImage_OutputPath`。影片走 `key_select_video_list`；只有一支影片、沒有圖片時另外帶 `K_SEGMENTVIDEOPATH`、`KSightPath`、`KSightThumbPath`、`sight_md5`。圖片加影片同時存在才帶 `key_select_mix_media_list`。同一份清單裡的重複路徑會去掉。
+6. 微信 8.0.79 用 `startActivity` 開相簿（日誌是 `rc=-1`），`setResult` 不會回到聊天。這種啟動不會把相簿換成別的 Activity（否則選圖結果也送不回去），而是在相簿 Intent 上做記號。`AlbumPreviewUI` 一出現就打開 Google 相簿。匯入完成後依序走原本相簿的送出：
+   - 把路徑寫進相簿裡的字串清單與 `MediaItem` 清單，並呼叫 DexKit 找到、本體含 `CropImage_OutputPath_List` 的確認方法
+   - 點畫面上的「发送 / 傳送 / 完成」
+   - 若相簿還沒關，再開 `com.tencent.mm.plugin.gallery.ui.ImagePreviewUI`（帶 `preview_image_list` 與同一份路徑），並在預覽頁再點一次發送
+   日誌會有一行 `delivery=`，寫明實際走了哪一條。若這次本來就是 `startActivityForResult`，仍把結果重播給呼叫端，日誌是 `delivery=activity-result`。
+7. 類名對不上、或這次不是從相簿畫面進來時，相簿底部仍有一顆「Google 相簿」。點下去走同一條匯入與交接，不再只做 `setResult`。
 
 `CropImage_Compress_Img` 預設為壓縮（微信原本的行為）。設定頁的「回傳時標記為原圖」會改送 `send_raw_img=true`。呼叫端若本來就帶了原圖標記，也會保留。`GalleryUI_ToUser` 這類字串會從開啟相簿的 Intent 抄回結果。
 
@@ -59,7 +64,7 @@ adb shell am start \
 adb logcat | grep WeChatSysPicker
 ```
 
-LSPosed 管理器裡的模組日誌也有同樣的行，tag 是 `WeChatSysPicker`。成功時會看到 `replaced ...AlbumPreviewUI with Google Photos ExternalPicker`、`copied item`、`replayed album result`。若看到 `falling back to ACTION_PICK_IMAGES`，代表 Google 相簿那個元件沒能啟動，畫面才會是 Hyper。DexKit 掃到的類名會以 `dexkit gallery class` 開頭。
+LSPosed 管理器裡的模組日誌也有同樣的行，tag 是 `WeChatSysPicker`。`rc=-1` 時會看到 `marked AlbumPreviewUI to open Google Photos`，接著是 `copied item` 與 `delivery=`。`delivery=confirm ...`、`delivery=send-button`、`delivery=image-preview` 表示已改走相簿自己的送出或 `ImagePreviewUI`。`delivery=activity-result` 才是傳統的 `setResult` 重播。`delivery=set-result` 代表前面的交接都沒讓相簿結束，最後仍呼叫了 `finish`。若看到 `falling back to ACTION_PICK_IMAGES`，代表 Google 相簿那個元件沒能啟動，畫面才會是 Hyper。DexKit 掃到的類名會以 `dexkit gallery class` 開頭，確認方法會以 `dexkit handoff method` 開頭。
 
 ## 已知會壞的情況
 
@@ -99,4 +104,4 @@ LSPosed module, scoped only to `com.tencent.mm`. When WeChat opens `AlbumPreview
 
 CN HyperOS rewrites `mediaprovider/allowed_cloud_providers` to `com.miui.gallery` via `com.miui.securitycenter`, so Google Photos cannot be the system picker's cloud provider. This module does not patch that whitelist and does not install an international gallery.
 
-Picked `content://` URIs are still copied by `MediaImporter` and returned through `WeChatResultContract` (`CropImage_OutputPath_List`, `key_select_video_list`, and the single-video sight extras). LSPosed scope must stay **`com.tencent.mm` only**. Target phone: Redmi K100 Pro Max, WeChat **8.0.79 (versionCode 3182)**. Success looks like the Google Photos picker, not `HyperMainActivity`. The module does not read chats, credentials, or payments.
+Picked `content://` URIs are still copied by `MediaImporter` and returned through `WeChatResultContract` (`CropImage_OutputPath_List`, `key_select_video_list`, and the single-video sight extras). WeChat 8.0.79 opens `AlbumPreviewUI` with `startActivity` (`rc=-1`), so `setResult` does not reach the chat. That start is marked instead of replaced; the album then opens Google Photos, and the import is handed off by seeding the album selection, invoking the confirm method that references `CropImage_OutputPath_List`, clicking 发送, or opening `ImagePreviewUI` with `preview_image_list`. Logcat line `delivery=` records which path ran. LSPosed scope must stay **`com.tencent.mm` only**. Target phone: Redmi K100 Pro Max, WeChat **8.0.79 (versionCode 3182)**. Success looks like the Google Photos picker, not `HyperMainActivity`, and the selected files show up in the chat the way the stock album send does. The module does not read chats, credentials, or payments.
