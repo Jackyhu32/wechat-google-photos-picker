@@ -3,6 +3,8 @@ package io.github.Jackyhu32.wechat.picker;
 import org.junit.After;
 import org.junit.Test;
 
+import java.io.File;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -18,7 +20,8 @@ public class MediaItemHookTest {
     public void rewritesFallbackImageArgsToVideoForRegisteredVideo() {
         String videoPath = "/storage/emulated/0/Android/data/com.tencent.mm/files/syspicker/VID_1.mp4";
         String thumbPath = "/storage/emulated/0/Android/data/com.tencent.mm/files/syspicker/THUMB_1.jpg";
-        VideoRegistry.VideoMeta meta = VideoRegistry.register(videoPath, thumbPath, "video/mp4", 12500L, 1080, 1920);
+        VideoRegistry.VideoMeta meta = VideoRegistry.register(
+                videoPath, thumbPath, "video/mp4", "video/avc", "audio/mp4a-latm", 12500L, 1080, 1920);
         assertNotNull(meta);
 
         Object[] args = new Object[]{1, 0L, videoPath, videoPath, ""};
@@ -41,6 +44,11 @@ public class MediaItemHookTest {
     }
 
     static final class FakeVideoMediaItem {
+        String x;
+        String y;
+        int z = -1;
+        int A = -1;
+        int B = -1;
         int videoDuration;
         int videoWidth;
         int videoHeight;
@@ -48,14 +56,28 @@ public class MediaItemHookTest {
     }
 
     @Test
-    public void populatesNamedVideoMetadataFieldsWhenZero() {
-        VideoRegistry.VideoMeta meta = VideoRegistry.register("/v.mp4", "/t.jpg", "video/mp4", 8400L, 720, 1280);
+    public void populatesWeChatAndNamedVideoMetadataFields() {
+        VideoRegistry.VideoMeta meta = VideoRegistry.register(
+                "/v.mp4", "/t.jpg", "video/mp4", "video/avc", "audio/mp4a-latm", 30097L, 1080, 1920);
         FakeVideoMediaItem item = new FakeVideoMediaItem();
         VideoMediaItemPatch.populateVideoItemFields(item, meta);
 
-        assertEquals(8400, item.videoDuration);
-        assertEquals(720, item.videoWidth);
-        assertEquals(1280, item.videoHeight);
-        assertEquals("video/mp4", item.videoMime);
+        assertEquals("video/avc", item.x);
+        assertEquals("audio/mp4a-latm", item.y);
+        assertEquals(30097, item.z);
+        assertEquals(1920, item.A);
+        assertEquals(1080, item.B);
+        assertEquals(30097, item.videoDuration);
+        assertEquals(1080, item.videoWidth);
+        assertEquals(1920, item.videoHeight);
+        assertEquals("video/avc", item.videoMime);
+    }
+
+    @Test
+    public void replaceExtensionFixesMpegToMp4() {
+        File dir = new File("/tmp/syspicker");
+        File mpeg = new File(dir, "VID_1795420573257_1.mpeg");
+        File renamed = MediaImporter.replaceExtension(dir, mpeg, "mp4");
+        assertEquals("VID_1795420573257_1.mp4", renamed.getName());
     }
 }

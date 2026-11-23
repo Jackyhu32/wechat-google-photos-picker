@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * In-memory registry of recently imported video files so WeChat's {@code GalleryItem$MediaItem}
  * factory and {@link GalleryHandoff} can construct genuine {@code VideoMediaItem} instances
- * with real thumbnails and MIME types instead of falling back to {@code ImageMediaItem}.
+ * with real thumbnails, track MIME types, and dimensions instead of falling back to {@code ImageMediaItem}.
  */
 public final class VideoRegistry {
     private static final int MAX_ENTRIES = 64;
@@ -19,6 +19,8 @@ public final class VideoRegistry {
         public final String path;
         public final String thumbPath;
         public final String mimeType;
+        public final String videoTrackMime;
+        public final String audioTrackMime;
         public final long durationMs;
         public final int width;
         public final int height;
@@ -28,6 +30,8 @@ public final class VideoRegistry {
                 String path,
                 String thumbPath,
                 String mimeType,
+                String videoTrackMime,
+                String audioTrackMime,
                 long durationMs,
                 int width,
                 int height,
@@ -36,6 +40,8 @@ public final class VideoRegistry {
             this.path = path;
             this.thumbPath = thumbPath;
             this.mimeType = (mimeType == null || mimeType.isEmpty()) ? "video/mp4" : mimeType;
+            this.videoTrackMime = videoTrackMime;
+            this.audioTrackMime = audioTrackMime;
             this.durationMs = Math.max(0L, durationMs);
             this.width = Math.max(0, width);
             this.height = Math.max(0, height);
@@ -54,6 +60,19 @@ public final class VideoRegistry {
             int width,
             int height
     ) {
+        return register(path, thumbPath, mimeType, null, null, durationMs, width, height);
+    }
+
+    public static VideoMeta register(
+            String path,
+            String thumbPath,
+            String mimeType,
+            String videoTrackMime,
+            String audioTrackMime,
+            long durationMs,
+            int width,
+            int height
+    ) {
         if (path == null || path.isEmpty()) {
             return null;
         }
@@ -61,6 +80,8 @@ public final class VideoRegistry {
                 path,
                 thumbPath,
                 mimeType,
+                videoTrackMime,
+                audioTrackMime,
                 durationMs,
                 width,
                 height,

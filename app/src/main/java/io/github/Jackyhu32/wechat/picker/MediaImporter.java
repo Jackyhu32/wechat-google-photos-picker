@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
@@ -32,7 +34,7 @@ public final class MediaImporter {
     private static final long MAX_BYTES = 1536L * 1024L * 1024L;
     private static final long MD5_LIMIT = 512L * 1024L * 1024L;
     private static final String[] VIDEO_EXT = {
-            "mp4", "mov", "m4v", "3gp", "3gpp", "webm", "mkv", "avi"
+            "mp4", "mov", "m4v", "3gp", "3gpp", "webm", "mkv", "avi", "mpeg", "mpg"
     };
 
     private MediaImporter() {
@@ -79,8 +81,8 @@ public final class MediaImporter {
     }
 
     /**
-     * Extracts thumbnail, duration, dimensions, and MIME type for an imported video in a single
-     * {@link MediaMetadataRetriever} pass and registers it in {@link VideoRegistry}.
+     * Extracts thumbnail, duration, dimensions, container MIME, and actual video/audio track MIME
+     * types (needed by WeChat Moments format validation) and registers them in {@link VideoRegistry}.
      */
     public static VideoRegistry.VideoMeta extractVideoMeta(Context context, String videoPath) {
         if (context == null || videoPath == null || videoPath.isEmpty()) {
@@ -133,8 +135,47 @@ public final class MediaImporter {
             } catch (Throwable ignored) {
             }
         }
-        Logx.i("video meta duration=" + durationMs + "ms " + width + "x" + height + " mime=" + mimeType);
-        return VideoRegistry.register(videoPath, thumbPath, mimeType, durationMs, width, height);
+
+        String[] tracks = extractTrackMimes(videoPath);
+        String videoTrackMime = tracks[0];
+        String audioTrackMime = tracks[1];
+        Logx.i("video meta duration=" + durationMs + "ms " + width + "x" + height
+                + " mime=" + mimeType
+                + " vTrack=" + videoTrackMime
+                + " aTrack=" + audioTrackMime);
+        return VideoRegistry.register(
+                videoPath, thumbPath, mimeType, videoTrackMime, audioTrackMime, durationMs, width, height);
+    }
+
+    private static String[] extractTrackMimes(String videoPath) {
+        String videoMime = null;
+        String audioMime = null;
+        MediaExtractor extractor = new MediaExtractor();
+        try {
+            extractor.setDataSource(videoPath);
+            int count = extractor.getTrackCount();
+            for (int i = 0; i < count; i++) {
+                MediaFormat format = extractor.getTrackFormat(i);
+                String trackMime = format.getString(MediaFormat.KEY_MIME);
+                if (trackMime == null) {
+                    continue;
+                }
+                String lower = trackMime.toLowerCase(Locale.US);
+                if (videoMime == null && lower.startsWith("video/")) {
+                    videoMime = trackMime;
+                } else if (audioMime == null && lower.startsWith("audio/")) {
+                    audioMime = trackMime;
+                }
+            }
+        } catch (Throwable t) {
+            Logx.i("video track mime extract failed: " + t);
+        } finally {
+            try {
+                extractor.release();
+            } catch (Throwable ignored) {
+            }
+        }
+        return new String[]{videoMime, audioMime};
     }
 
     public static String videoThumb(Context context, String videoPath) {
@@ -223,17 +264,17 @@ public final class MediaImporter {
             out.delete();
             return null;
         }
-        if (ext.isEmpty()) {
+        // Always sniff copied videos (Google Photos often reports video/mpeg for MP4 containers,
+        // and WeChat Moments rejects .mpeg suffix even when the container is standard MP4).
+        if (ext.isEmpty() || video) {
             String sniffed = sniff(out);
-            if (!sniffed.isEmpty()) {
+            if (!sniffed.isEmpty() && !sniffed.equals(ext)) {
                 video = isVideo(null, sniffed);
-                File renamed = new File(dir, out.getName() + "." + sniffed);
+                File renamed = replaceExtension(dir, out, sniffed);
                 if (out.renameTo(renamed)) {
                     out = renamed;
                 }
-                if ("heic".equals(sniffed) || "heif".equals(sniffed)) {
-                    ext = sniffed;
-                }
+                ext = sniffed;
             }
         }
         if ("heic".equals(ext) || "heif".equals(ext) || (mime != null && (mime.contains("heic") || mime.contains("heif")))) {
@@ -248,6 +289,13 @@ public final class MediaImporter {
         String hash = digest == null ? null : hex(digest.digest());
         Logx.i("copied item " + index + " video=" + video + " bytes=" + out.length() + " -> " + out.getAbsolutePath());
         return new Imported(video, out.getAbsolutePath(), hash);
+    }
+
+    static File replaceExtension(File dir, File file, String newExt) {
+        String name = file.getName();
+        int dot = name.lastIndexOf('.');
+        String base = dot > 0 ? name.substring(0, dot) : name;
+        return new File(dir, base + "." + newExt);
     }
 
     private static List<Uri> extractUris(Intent data) {
@@ -398,6 +446,9 @@ public final class MediaImporter {
         }
         if ("quicktime".equals(ext)) {
             return "mov";
+        }
+        if ("mpeg4".equals(ext) || "mp4v".equals(ext)) {
+            return "mp4";
         }
         return ext == null ? "" : ext;
     }
