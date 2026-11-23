@@ -76,6 +76,7 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         hookExecStart();
         hookDispatchResult();
         hookResume();
+        MediaItemHook.install(lpparam.classLoader);
         scheduleDiscover(process);
     }
 
@@ -267,6 +268,9 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
             }
         }
         if (pending == null) {
+            if (forwardPreviewResultIfNeeded(activity, primary, other, intentIndex, param)) {
+                return;
+            }
             return;
         }
         Intent data = intentIndex >= 0 && param.args[intentIndex] instanceof Intent
@@ -296,6 +300,41 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         int resultSlot = resultIndex;
         int intentSlot = intentIndex;
         IO.execute(() -> finishImport(activity, job, data, snapshot, method, resultSlot, intentSlot));
+    }
+
+    /**
+     * Safety net: if {@code ImagePreviewUI} opened with {@link GalleryHandoff#PREVIEW_REQUEST}
+     * returns {@code RESULT_OK} to an {@code AlbumPreviewUI} that has a calling activity,
+     * forward that result so {@code AlbumPreviewUI} does not ignore unknown request code 0x5F12.
+     */
+    private boolean forwardPreviewResultIfNeeded(
+            Activity activity,
+            int primary,
+            int other,
+            int intentIndex,
+            XC_MethodHook.MethodHookParam param
+    ) {
+        int resultCode;
+        if (primary == GalleryHandoff.PREVIEW_REQUEST) {
+            resultCode = other;
+        } else if (other == GalleryHandoff.PREVIEW_REQUEST) {
+            resultCode = primary;
+        } else {
+            return false;
+        }
+        if (resultCode != Activity.RESULT_OK || activity.getCallingActivity() == null) {
+            return false;
+        }
+        Intent data = intentIndex >= 0 && param.args[intentIndex] instanceof Intent
+                ? (Intent) param.args[intentIndex] : null;
+        if (data == null) {
+            return false;
+        }
+        param.setResult(null);
+        activity.setResult(Activity.RESULT_OK, data);
+        activity.finish();
+        Logx.i("forwarded preview result to " + activity.getCallingActivity().getClassName());
+        return true;
     }
 
     private void finishImport(
@@ -333,9 +372,12 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
         for (MediaImporter.Imported file : imported) {
             String thumb = null;
             String hash = file.md5;
-            if (file.video && singleVideo) {
-                thumb = MediaImporter.videoThumb(activity, file.path);
-                if (hash == null) {
+            if (file.video) {
+                VideoRegistry.VideoMeta meta = MediaImporter.extractVideoMeta(activity, file.path);
+                if (meta != null) {
+                    thumb = meta.thumbPath;
+                }
+                if (singleVideo && hash == null) {
                     hash = MediaImporter.md5(file.path);
                 }
             }
@@ -367,7 +409,7 @@ public class MainHook implements IXposedHookLoadPackage, IXposedHookZygoteInit {
                     toast(activity, "沒有匯入到可讀的照片或影片");
                     return;
                 }
-                String how = GalleryHandoff.deliver(activity, rewritten);
+                String how = GalleryHandoff.deliver(activity, job.launch, rewritten);
                 Logx.i("delivery=" + how);
                 return;
             }

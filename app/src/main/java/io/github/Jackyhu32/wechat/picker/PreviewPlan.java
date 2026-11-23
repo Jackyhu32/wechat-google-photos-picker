@@ -12,12 +12,18 @@ public final class PreviewPlan {
     public final List<String> videos;
     public final List<String> previewPaths;
     public final int index;
+    public final boolean isPreviewPhoto;
 
     public PreviewPlan(List<String> images, List<String> videos, List<String> previewPaths, int index) {
         this.images = images;
         this.videos = videos;
         this.previewPaths = previewPaths;
         this.index = index;
+        this.isPreviewPhoto = videos == null || videos.isEmpty();
+    }
+
+    public boolean hasVideos() {
+        return videos != null && !videos.isEmpty();
     }
 
     public static PreviewPlan from(List<String> images, List<String> videos) {

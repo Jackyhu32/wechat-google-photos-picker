@@ -78,30 +78,52 @@ public final class MediaImporter {
         return out;
     }
 
-    public static String videoThumb(Context context, String videoPath) {
-        if (context == null || videoPath == null) {
+    /**
+     * Extracts thumbnail, duration, dimensions, and MIME type for an imported video in a single
+     * {@link MediaMetadataRetriever} pass and registers it in {@link VideoRegistry}.
+     */
+    public static VideoRegistry.VideoMeta extractVideoMeta(Context context, String videoPath) {
+        if (context == null || videoPath == null || videoPath.isEmpty()) {
             return null;
         }
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         Bitmap frame = null;
+        String thumbPath = null;
+        long durationMs = 0L;
+        int width = 0;
+        int height = 0;
+        String mimeType = "video/mp4";
         try {
             retriever.setDataSource(videoPath);
+            durationMs = parseLong(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION));
+            width = (int) parseLong(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
+            height = (int) parseLong(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
+            int rotation = (int) parseLong(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));
+            if (rotation == 90 || rotation == 270) {
+                int tmp = width;
+                width = height;
+                height = tmp;
+            }
+            String detectedMime = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE);
+            if (detectedMime != null && detectedMime.toLowerCase(Locale.US).startsWith("video/")) {
+                mimeType = detectedMime;
+            }
             frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
             if (frame == null) {
-                return null;
+                frame = retriever.getFrameAtTime(-1);
             }
-            File dir = outputDir(context);
-            File thumb = new File(dir, "THUMB_" + System.currentTimeMillis() + ".jpg");
-            try (FileOutputStream out = new FileOutputStream(thumb)) {
-                if (!frame.compress(Bitmap.CompressFormat.JPEG, 85, out)) {
-                    return null;
+            if (frame != null) {
+                File dir = outputDir(context);
+                File thumb = new File(dir, "THUMB_" + System.currentTimeMillis() + "_" + Math.abs(videoPath.hashCode()) + ".jpg");
+                try (FileOutputStream out = new FileOutputStream(thumb)) {
+                    if (frame.compress(Bitmap.CompressFormat.JPEG, 85, out)) {
+                        thumbPath = thumb.getAbsolutePath();
+                        Logx.i("video thumb " + thumb.getName() + " " + thumb.length() + " bytes");
+                    }
                 }
             }
-            Logx.i("video thumb " + thumb.getName() + " " + thumb.length() + " bytes");
-            return thumb.getAbsolutePath();
         } catch (Throwable t) {
-            Logx.i("video thumb failed: " + t);
-            return null;
+            Logx.i("video meta extract failed: " + t);
         } finally {
             if (frame != null) {
                 frame.recycle();
@@ -110,6 +132,24 @@ public final class MediaImporter {
                 retriever.release();
             } catch (Throwable ignored) {
             }
+        }
+        Logx.i("video meta duration=" + durationMs + "ms " + width + "x" + height + " mime=" + mimeType);
+        return VideoRegistry.register(videoPath, thumbPath, mimeType, durationMs, width, height);
+    }
+
+    public static String videoThumb(Context context, String videoPath) {
+        VideoRegistry.VideoMeta meta = extractVideoMeta(context, videoPath);
+        return meta == null ? null : meta.thumbPath;
+    }
+
+    private static long parseLong(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (Throwable ignored) {
+            return 0L;
         }
     }
 

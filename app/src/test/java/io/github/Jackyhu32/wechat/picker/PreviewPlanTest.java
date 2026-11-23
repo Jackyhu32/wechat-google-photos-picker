@@ -6,6 +6,8 @@ import java.util.Arrays;
 import java.util.Collections;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class PreviewPlanTest {
     @Test
@@ -18,5 +20,16 @@ public class PreviewPlanTest {
         assertEquals(Collections.singletonList("/v.mp4"), plan.videos);
         assertEquals(Arrays.asList("/a.jpg", "/v.mp4"), plan.previewPaths);
         assertEquals(0, plan.index);
+        assertTrue(plan.hasVideos());
+        assertFalse(plan.isPreviewPhoto);
+    }
+
+    @Test
+    public void imagesOnlySetsIsPreviewPhotoTrue() {
+        PreviewPlan plan = PreviewPlan.from(
+                Collections.singletonList("/a.jpg"),
+                Collections.emptyList());
+        assertFalse(plan.hasVideos());
+        assertTrue(plan.isPreviewPhoto);
     }
 }

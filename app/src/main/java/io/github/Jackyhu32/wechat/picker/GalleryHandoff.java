@@ -1,7 +1,9 @@
 package io.github.Jackyhu32.wechat.picker;
 
 import android.app.Activity;
+import android.content.ComponentName;
 import android.content.Intent;
+import android.os.Bundle;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -12,27 +14,92 @@ import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * WeChat 8.0.79 opens AlbumPreviewUI with request code -1, so {@code setResult}
- * never reaches the chat. After the user picks in Google Photos, seed the album
- * selection and open ImagePreviewUI. Do not tap 发送 and do not call the confirm
- * method that sends the message; the user edits on that screen and taps send.
+ * Hands off media selected from Google Photos when the user tapped the injected
+ * 「Google 相簿」 button inside {@code AlbumPreviewUI}.
+ *
+ * <ul>
+ *   <li>For Scan (掃一掃) / OCR / single-select non-chat callers, returns the selection
+ *       directly to the caller via {@code setResult(RESULT_OK, selection) + finish()}.</li>
+ *   <li>For Chat / Moments multi-select, seeds the album lists with properly typed
+ *       {@code MediaItem}s (including {@code VideoMediaItem} metadata) and opens
+ *       {@code ImagePreviewUI} so the user can review and tap send.</li>
+ * </ul>
  */
 public final class GalleryHandoff {
     static final int PREVIEW_REQUEST = 0x5F12;
+
+    private static final String[] STALE_RESULT_KEYS = {
+            WeChatResultContract.CROP_LIST,
+            WeChatResultContract.CROP_SINGLE,
+            WeChatResultContract.PREVIEW_LIST,
+            WeChatResultContract.VIDEO_LIST,
+            WeChatResultContract.MIX_LIST,
+            WeChatResultContract.SEG_VIDEO,
+            WeChatResultContract.SIGHT_PATH,
+            WeChatResultContract.SIGHT_THUMB,
+            WeChatResultContract.SIGHT_MD5,
+            "key_select_image_list",
+            "isPreviewPhoto",
+            ResultIntents.RESULT_MARKER
+    };
 
     private GalleryHandoff() {
     }
 
     public static String deliver(Activity album, Intent selection) {
+        return deliver(album, null, selection);
+    }
+
+    public static String deliver(Activity album, LaunchOptions launch, Intent selection) {
         if (album == null || selection == null) {
             return "none";
         }
         selection.removeExtra(ResultIntents.RESULT_MARKER);
-        if (album.getIntent() != null) {
-            album.getIntent().putExtras(selection);
-            Logx.i("album intent keys=" + extraKeys(album.getIntent()));
+
+        ComponentName calling = album.getCallingActivity();
+        String callingClass = calling == null ? null : calling.getClassName();
+        Intent albumIntent = album.getIntent();
+        int querySourceType = albumIntent == null ? -1 : albumIntent.getIntExtra("query_source_type", -1);
+        boolean hasScanExtra = detectScanExtra(albumIntent);
+        boolean hasChatTarget = hasChatTarget(albumIntent, selection);
+        int maxCount = launch != null
+                ? launch.maxCount
+                : (albumIntent == null ? 9 : albumIntent.getIntExtra(WeChatResultContract.MAX_SELECT, 9));
+        List<String> videos = selection.getStringArrayListExtra(WeChatResultContract.VIDEO_LIST);
+        boolean hasVideos = videos != null && !videos.isEmpty();
+
+        DeliveryPolicy.Mode mode = DeliveryPolicy.decide(
+                calling != null,
+                callingClass,
+                querySourceType,
+                hasScanExtra,
+                hasChatTarget,
+                maxCount,
+                hasVideos
+        );
+        Logx.i("delivery policy=" + mode
+                + " calling=" + callingClass
+                + " source=" + querySourceType
+                + " scanExtra=" + hasScanExtra
+                + " chat=" + hasChatTarget
+                + " max=" + maxCount
+                + " videos=" + (videos == null ? 0 : videos.size()));
+
+        if (mode == DeliveryPolicy.Mode.DIRECT_RESULT) {
+            Intent direct = new Intent(selection);
+            direct.removeExtra(ResultIntents.RESULT_MARKER);
+            album.setResult(Activity.RESULT_OK, direct);
+            album.finish();
+            return "direct-result";
+        }
+
+        if (albumIntent != null) {
+            clearStaleResultExtras(albumIntent);
+            albumIntent.putExtras(selection);
+            Logx.i("album intent keys=" + extraKeys(albumIntent));
         }
         int seeded = seedSelection(album, selection);
         Logx.i("delivery seededLists=" + seeded);
@@ -57,6 +124,59 @@ public final class GalleryHandoff {
         return builder.toString();
     }
 
+    private static boolean detectScanExtra(Intent albumIntent) {
+        if (albumIntent == null || albumIntent.getExtras() == null) {
+            return false;
+        }
+        Bundle extras = albumIntent.getExtras();
+        for (String key : extras.keySet()) {
+            if (key == null) {
+                continue;
+            }
+            String lower = key.toLowerCase(Locale.US);
+            if (lower.contains("scan") || lower.contains("qbar") || lower.contains("ocr")) {
+                Object val = extras.get(key);
+                if (Boolean.TRUE.equals(val)) {
+                    return true;
+                }
+                if (val instanceof String && !((String) val).isEmpty()) {
+                    return true;
+                }
+                if (val instanceof Integer && ((Integer) val) > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasChatTarget(Intent albumIntent, Intent selection) {
+        String[] chatKeys = {"GalleryUI_ToUser", "to_user", "toUser", "Chat_User"};
+        for (String key : chatKeys) {
+            if (hasNonEmptyString(selection, key) || hasNonEmptyString(albumIntent, key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasNonEmptyString(Intent intent, String key) {
+        if (intent == null) {
+            return false;
+        }
+        String val = intent.getStringExtra(key);
+        return val != null && !val.isEmpty();
+    }
+
+    private static void clearStaleResultExtras(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        for (String key : STALE_RESULT_KEYS) {
+            intent.removeExtra(key);
+        }
+    }
+
     private static boolean openPreview(Activity album, Intent selection) {
         PreviewPlan plan = PreviewPlan.from(
                 selection.getStringArrayListExtra(WeChatResultContract.CROP_LIST),
@@ -69,18 +189,25 @@ public final class GalleryHandoff {
         if (album.getIntent() != null && album.getIntent().getExtras() != null) {
             preview.putExtras(album.getIntent().getExtras());
         }
+        clearStaleResultExtras(preview);
         preview.putExtras(selection);
         preview.putStringArrayListExtra(WeChatResultContract.PREVIEW_LIST, new ArrayList<>(plan.previewPaths));
-        preview.putStringArrayListExtra("key_select_image_list", new ArrayList<>(plan.images));
+        if (!plan.images.isEmpty()) {
+            preview.putStringArrayListExtra("key_select_image_list", new ArrayList<>(plan.images));
+        }
+        if (plan.hasVideos()) {
+            preview.putStringArrayListExtra(WeChatResultContract.VIDEO_LIST, new ArrayList<>(plan.videos));
+        }
         preview.putExtra("preview_image_index", plan.index);
         preview.putExtra("preview_position", plan.index);
-        preview.putExtra("isPreviewPhoto", true);
+        preview.putExtra("isPreviewPhoto", plan.isPreviewPhoto);
         preview.removeExtra(ResultIntents.RESULT_MARKER);
         try {
             album.startActivityForResult(preview, PREVIEW_REQUEST);
             Logx.i("delivery opened " + PreviewPlan.CLASS_NAME
                     + " images=" + plan.images.size()
                     + " videos=" + plan.videos.size()
+                    + " isPreviewPhoto=" + plan.isPreviewPhoto
                     + " waiting for user send");
             return true;
         } catch (Throwable t) {
@@ -147,6 +274,7 @@ public final class GalleryHandoff {
             }
             if (args[0] instanceof Class && isMediaItem((Class<?>) args[0])) {
                 Class<?> itemClass = (Class<?>) args[0];
+                MediaItemHook.ensureHooked(itemClass);
                 for (String path : images) {
                     addItem(list, itemClass, path, false);
                 }
@@ -167,7 +295,6 @@ public final class GalleryHandoff {
         return name.contains("MediaItem") || name.contains("GalleryItem");
     }
 
-    @SuppressWarnings("unchecked")
     private static void addStrings(List<Object> list, List<String> paths) {
         for (String path : paths) {
             if (path != null && !path.isEmpty() && !list.contains(path)) {
@@ -188,6 +315,11 @@ public final class GalleryHandoff {
 
     static Object newMediaItem(Class<?> itemClass, String path, boolean video) {
         int kind = video ? 2 : 1;
+        VideoRegistry.VideoMeta meta = video ? VideoRegistry.get(path) : null;
+        long id = meta != null ? meta.syntheticId : 0L;
+        String thumb = (meta != null && meta.thumbPath != null && !meta.thumbPath.isEmpty())
+                ? meta.thumbPath : path;
+        String mime = video ? (meta != null ? meta.mimeType : "video/mp4") : "";
         try {
             for (Method method : itemClass.getDeclaredMethods()) {
                 if (!Modifier.isStatic(method.getModifiers())) {
@@ -202,7 +334,11 @@ public final class GalleryHandoff {
                         && params[4] == String.class
                         && itemClass.isAssignableFrom(method.getReturnType())) {
                     method.setAccessible(true);
-                    return method.invoke(null, kind, 0L, path, path, "");
+                    Object item = method.invoke(null, kind, id, path, thumb, mime);
+                    if (video && meta != null && item != null) {
+                        VideoMediaItemPatch.populateVideoItemFields(item, meta);
+                    }
+                    return item;
                 }
             }
             for (Constructor<?> constructor : itemClass.getDeclaredConstructors()) {
@@ -214,11 +350,18 @@ public final class GalleryHandoff {
                         && params[2] == String.class
                         && params[3] == String.class
                         && params[4] == String.class) {
-                    return constructor.newInstance(kind, 0L, path, path, path);
+                    Object item = constructor.newInstance(kind, id, path, thumb, mime);
+                    if (video && meta != null) {
+                        VideoMediaItemPatch.populateVideoItemFields(item, meta);
+                    }
+                    return item;
                 }
                 if (params.length == 0) {
                     Object item = constructor.newInstance();
                     fillPathFields(item, path);
+                    if (video && meta != null) {
+                        VideoMediaItemPatch.populateVideoItemFields(item, meta);
+                    }
                     return item;
                 }
             }
