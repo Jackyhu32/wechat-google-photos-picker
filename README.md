@@ -1,106 +1,150 @@
-# 微信系統相簿
+# 微信启用Google相册相片 (WeChat Google Photos Picker)
 
-LSPosed / Xposed 模組，套件名稱 `io.github.Jackyhu32.wechat.picker`。微信（`com.tencent.mm`）打開內建相簿時，**直接開啟 Google 相簿的選圖畫面**，而不是 HyperOS 系統相片選擇器。選完之後，模組仍把 `content://` 複製到微信自己的目錄，再用微信原本就在讀的 Intent extra 把路徑交回去。不做登入、不讀聊天、不改付款。
+> **Credit:** Grok、Gemini ｜ **Idea:** Jacky
 
-目標機是 Redmi K100 Pro Max（HyperOS，大陸版），微信 **8.0.79（versionCode 3182）**，已安裝 Google 相簿。
+LSPosed / Xposed 模組（套件名稱：`io.github.Jackyhu32.wechat.picker`）。讓陸版手機上的微信（`com.tencent.mm`）在開啟相簿選圖、傳影片或掃一掃選圖時，**直接使用 Google 相簿（Google Photos）選圖畫面**，繞過陸版 HyperOS 系統相片選擇器封鎖 Google 相簿雲端媒體的限制。
 
-## 為什麼不走系統相片選擇器
+本模組**不修改系統白名單**、**不重裝國際版系統相簿**、**不讀取聊天紀錄、帳號憑證或付款資訊**。
 
-大陸版 HyperOS 的 `device_config`：
+---
 
-`mediaprovider/allowed_cloud_providers=com.miui.gallery`
+## 目錄
+- [為什麼需要這個模組](#為什麼需要這個模組)
+- [核心功能（v1.3.2）](#核心功能v132)
+- [環境需求](#環境需求)
+- [詳細安裝與使用步驟](#詳細安裝與使用步驟)
+- [模組設定說明與診斷日誌](#模組設定說明與診斷日誌)
+- [已知限制與注意事項](#已知限制與注意事項)
+- [自行建置](#自行建置)
+- [English Guide](#english-guide)
 
-這份白名單會被 `com.miui.securitycenter` 改回去。系統 Photo Picker（`com.android.photopicker/.hyper.HyperMainActivity`）因此不會把 Google 相簿當成雲端媒體來源，選單裡也設不了。這個模組**不去改那份白名單**（不做 Magisk 覆寫），也**不改裝國際版相簿**。
+---
 
-改法是跳過系統選擇器，直接啟動 Google 相簿自己的外部選圖 Activity。這組 Intent 已在這支手機上用 `adb am start` 對過：
+## 為什麼需要這個模組
 
-```text
-adb shell am start \
-  -a android.intent.action.GET_CONTENT \
-  -t 'image/*' \
-  --ez android.intent.extra.ALLOW_MULTIPLE true \
-  -n com.google.android.apps.photos/.picker.external.ExternalPickerActivity
-```
-
-從微信裡選照片時，應出現 **Google 相簿的選圖畫面**，而不是 `HyperMainActivity`。
-
-## 它做什麼
-
-1. 攔截 `Instrumentation.execStartActivity`。目標元件是 `com.tencent.mm.plugin.gallery.ui.AlbumPreviewUI`（類名以 `AlbumPreviewUI` 結尾也算），或 DexKit 在 `com.tencent.mm.plugin.gallery` 裡找到、同時引用 `max_select_count` 與 `CropImage_OutputPath_List` 的相簿類。微信 8.0.79 這次啟動的 request code 是 `-1`，相簿會留在畫面上，不會一出現就打開 Google 相簿。
-2. 優先開啟  
-   `com.google.android.apps.photos/com.google.android.apps.photos.picker.external.ExternalPickerActivity`  
-   - Action：`ACTION_GET_CONTENT`  
-   - 類型依原本的 `query_media_type`：`1` 為 `image/*`、`2` 為 `video/*`、`3`（或沒帶類型的多選）為 `*/*`，並附上 `EXTRA_MIME_TYPES` = `image/*`、`video/*`。沒帶類型的單選（大頭貼、裁切）只開圖片。  
-   - `max_select_count` 大於 1 時帶 `EXTRA_ALLOW_MULTIPLE`。沒寫上限時預設 9，模組最多帶回 100 個。  
-   `query_source_type` 是業務來源，不是媒體種類，故意不拿來過濾。
-3. 只有這個元件真的啟動失敗（找不到 Activity 或被系統拒絕）時，才退回 `ACTION_PICK_IMAGES`。那條舊路徑仍會留在 `com.android.photopicker`（`HyperMainActivity`）。微信行程常常因為套件可見度而 `resolveActivity` 不到 Google 相簿；這種情況**不算**沒安裝，仍會直接啟動上面的元件。
-4. 在 `Activity.dispatchActivityResult` 收到結果後，於背景把 URI 複製到  
-   `/storage/emulated/0/Android/data/com.tencent.mm/files/syspicker/`  
-   （外接儲存不可用時改到微信 cache）。已經在共用儲存上的檔案直接沿用路徑。HEIC/HEIF 會轉成 JPEG。超過約 1.5GB 的檔案會略過。匯入仍走原來的 `MediaImporter` 與 `WeChatResultContract`。
-5. 把路徑放進結果 Intent。圖片走 `CropImage_OutputPath_List`、`preview_image_list`、`CropImage_OutputPath`。影片走 `key_select_video_list`；只有一支影片、沒有圖片時另外帶 `K_SEGMENTVIDEOPATH`、`KSightPath`、`KSightThumbPath`、`sight_md5`。圖片加影片同時存在才帶 `key_select_mix_media_list`。同一份清單裡的重複路徑會去掉。
-6. 微信 8.0.79 用 `startActivity` 開相簿（日誌是 `rc=-1`），`setResult` 不會回到聊天。相簿維持微信自己的畫面。底部「Google 相簿」才會打開 Google 相簿外部選圖。選完並匯入之後：
-   - 把路徑寫進相簿的字串清單與 `MediaItem` 清單，Intent 帶 `CropImage_OutputPath_List`
-   - 打開 `com.tencent.mm.plugin.gallery.ui.ImagePreviewUI`，`preview_image_list` 是同一份路徑
-   - **不會**自動點「发送 / 傳送 / 完成」，也**不會**呼叫會把訊息送出的確認方法
-   預覽頁留給你裁切、標註，再自己按發送。日誌是 `delivery=image-preview`。若預覽打不開，相簿留著並且路徑已經寫進清單（`delivery=seeded-album`）。若這次本來就是 `startActivityForResult`，仍把結果重播給呼叫端，日誌是 `delivery=activity-result`。
-
-`CropImage_Compress_Img` 預設為壓縮（微信原本的行為）。設定頁的「回傳時標記為原圖」會改送 `send_raw_img=true`。呼叫端若本來就帶了原圖標記，也會保留。`GalleryUI_ToUser` 這類字串會從開啟相簿的 Intent 抄回結果。
-
-朋友圈影片有時還要 parcelable 的 `KMMSightExtInfo`。這個模組只填路徑、縮圖與 MD5，填不出那個物件。純圖片與聊天傳圖是主要路徑。
-
-## 安裝
-
-1. 手機已有 Magisk / KernelSU 與 LSPosed（Zygisk）。模組的 `xposedminversion` 是 93。
-2. 安裝 debug APK：`dist/WeChatSysPicker-debug.apk`，或自行 `./gradlew assembleDebug`。
-3. LSPosed → 模組 → 啟用「微信系統相簿」。作用域**只勾微信 `com.tencent.mm`**。不要勾系統框架、Google 相簿、`com.android.photopicker` 或其他套件。這個模組要跑在微信行程裡，勾多了沒有幫助。
-4. 強制停止微信。不必重開手機，但 LSPosed 若提示重啟作用域，照它的做。
-5. 打開「微信系統相簿」這個 App。頁首若寫 LSPosed 已接管設定檔，開關才會傳進微信。若仍寫尚未接管，先完成第 3 步再重開這個頁面，然後把開關再撥一次。預設是：取代內建相簿，並保留備用按鈕。
-6. 手機上要已安裝並登入 Google 相簿。不需要、也無法在 Hyper 選擇器裡把雲端媒體改成 Google 相簿。
-
-## 日誌
+大陸版 HyperOS（如小米 / Redmi）的系統設定會持續把雲端相片提供者白名單重寫為：
 
 ```text
-adb logcat | grep WeChatSysPicker
+mediaprovider/allowed_cloud_providers=com.miui.gallery
 ```
 
-LSPosed 管理器裡的模組日誌也有同樣的行，tag 是 `WeChatSysPicker`。`rc=-1` 時會看到 `leaving AlbumPreviewUI up for the Google 相簿 button`。按下按鈕並選完後是 `copied item`，然後 `delivery=image-preview`（停在預覽，等你自己按發送）。`delivery=activity-result` 才是傳統的 `setResult` 重播。若看到 `falling back to ACTION_PICK_IMAGES`，代表 Google 相簿那個元件沒能啟動，畫面才會是 Hyper。DexKit 掃到的類名會以 `dexkit gallery class` 開頭。
+導致系統內建 Photo Picker（`com.android.photopicker/.hyper.HyperMainActivity`）無法顯示 Google 相簿的雲端相片與影片。本模組改為在微信開啟相簿時，直接啟動 Google 相簿自身的外部選圖元件：
 
-## 已知會壞的情況
+```text
+com.google.android.apps.photos/.picker.external.ExternalPickerActivity
+```
 
-- 微信改版後若不再用 `AlbumPreviewUI`，也不再讀上面的路徑 extra，而改吃內部 media id，這個模組就只剩備用按鈕，而且按鈕也要那個 Activity 還在。先看日誌再對類名。
-- 朋友圈「發影片」若走拍攝頁而不是相簿 Activity，不會被換成 Google 相簿。
-- 微信相簿裡的編輯、貼圖、拍攝入口會被跳過，因為整個畫面被 Google 相簿取代。
-- 大檔影片複製時，聊天畫面會蓋一層「正在匯入」。雲端影片要等 Google 相簿把檔案交給我們才開始複製。
-- HEIC 會轉成 JPEG。GIF / PNG / WebP 維持原檔。
-- 單選大頭貼若選到影片，結果裡不會有圖片路徑，裁切頁可能沒反應。這種啟動預設只允許圖片。
-- Google 相簿的多選沒有系統 `PICK_IMAGES_MAX` 那種硬上限。選超過 `max_select_count` 時，模組只把前面的項目交回微信。
-- 三天前複製進 `syspicker` 的暫存檔會在下次匯入時刪掉。
-- 模組更新後若微信已在背景，先強制停止微信再試。
+選完後將雲端或本機媒體複製／對接到微信可讀取的路徑，再依微信原生協議交回預覽頁或掃一掃。
 
-## 建置
+---
 
-需要 JDK 17 或以上（本專案在 JDK 21 上編過）與 Android SDK 35。
+## 核心功能（v1.3.2）
+
+1. **攔截與浮動入口雙重支援**：
+   - 支援攔截 `AlbumPreviewUI`（含透過 DexKit 自動辨識改名後的相簿類）。
+   - 當微信（如 8.0.79 / 8.0.80）以 `startActivity`（`rc=-1`）開啟相簿時，自動在相簿底部顯示藍色「**Google 相簿**」浮動按鈕。
+2. **聊天圖片與影片完整預覽（不自動發送）**：
+   - 選完圖片或影片後，自動提取影片 JPEG 縮圖、時長、方向修正寬高與 MIME，並寫入微信 `GalleryCore` 與 `preview_media_item_list`，正確顯示影片預覽而非黑屏圖片。
+   - 停留在微信 `ImagePreviewUI` 供你預覽、裁切、標註或勾選原圖，**不會自動點擊發送**。
+3. **微信掃一掃直接交回解碼**：
+   - 從「掃一掃 → 相簿」選取 Google 相簿裡的二維碼圖片後，會直接設定相容微信 `AsyncObtainImage` 的 `Intent.setData` 並回傳給 `BaseScanUI` 解碼，不再誤跳聊天預覽或報錯。
+4. **自動格式處理與防殘留**：
+   - 雲端媒體會複製到微信私有 `syspicker/` 目錄（三天前的暫存檔自動清理）；HEIC/HEIF 自動轉為 JPEG；GIF / PNG / WebP 維持原檔；單檔上限約 1.5 GB。
+5. **內建背景診斷日誌**：
+   - 設定頁內建「開啟背景自動記錄日誌」開關，不必接電腦抓 `adb logcat`，即可一鍵複製或分享除錯日誌。
+
+---
+
+## 環境需求
+
+- 已取得 Root 權限（Magisk / KernelSU / APatch）並安裝 **LSPosed**（建議 Zygisk 版本或 Vector，最低支援 `xposedminversion` 93）。
+- 已安裝 **微信**（已於 8.0.79 / 8.0.80 實機驗證）。
+- 已安裝並登入 **Google 相簿（Google Photos）**，且已開啟相簿備份。
+
+---
+
+## 詳細安裝與使用步驟
+
+### 步驟 1：安裝模組 APK
+1. 前往 [Releases](https://github.com/Jackyhu32/wechat-google-photos-picker/releases)（或 [Xposed Modules Repo](https://github.com/Xposed-Modules-Repo/io.github.Jackyhu32.wechat.picker/releases)）下載最新 `WeChatSysPicker-debug.apk`。
+2. 在手機上安裝 APK（若曾安裝舊套件名稱 `com.androidopenbot.wechat.picker`，請先在 LSPosed 停用並解除安裝舊版）。
+
+### 步驟 2：在 LSPosed 啟用模組與設定作用域
+1. 打開 **LSPosed 管理器**（或 Vector）→ 進入「**模組**」頁面。
+2. 找到並啟用「**微信系統相簿**」。
+3. 在作用域（Scope）清單中，**只勾選微信 `com.tencent.mm`**。
+   - **切勿勾選**系統框架、Google 相簿、`com.android.photopicker` 或其他任何 App。
+4. **強制停止微信**（系統設定 → 應用程式 → 微信 → 強制停止），讓模組重新注入微信行程。
+
+### 步驟 3：檢查模組設定頁狀態
+1. 打開桌面上的「**微信系統相簿**」App。
+2. 確認頂部狀態橫幅顯示「**LSPosed 已接管設定檔**」（若顯示尚未接管，請確認步驟 2 已勾選 `com.tencent.mm` 並重開此設定頁）。
+
+### 步驟 4：在微信中使用
+- **聊天 / 朋友圈傳圖與影片**：
+  1. 在微信聊天視窗點「相簿」。
+  2. 點擊底部藍色「**Google 相簿**」浮動按鈕（若該入口支援直接跳轉則會自動開啟 Google 相簿）。
+  3. 在 Google 相簿選取一張或多張圖片／影片後按完成。
+  4. 等待匯入提示完成後，畫面會停在微信預覽頁，確認無誤後自行點擊「發送」。
+- **掃一掃辨識 Google 相簿二維碼**：
+  1. 打開微信「掃一掃」→ 點右下角相簿圖示 → 點「**Google 相簿**」。
+  2. 選取二維碼圖片後，會自動返回掃一掃畫面並完成解碼。
+
+---
+
+## 模組設定說明與診斷日誌
+
+打開「微信系統相簿」App 可調整以下選項：
+- **打開相簿時直接用 Google 相簿**：支援 `startActivityForResult` 的相簿入口會直接改開 Google 相簿。
+- **仍進入微信相簿時顯示「Google 相簿」**：在相簿底部保留藍色浮動按鈕（微信 8.0.79+ 主要透過此按鈕觸發）。
+- **回傳時標記為原圖**：強制附加 `send_raw_img=true` 並關閉壓縮標記。
+- **診斷日誌（v1.3.2 新增）**：開啟「**開啟背景自動記錄日誌**」後，回到微信重現一次操作，再切回模組 App 即可預覽紀錄，並可點「**複製日誌**」或「**分享日誌**」用於回報問題。
+
+---
+
+## 已知限制與注意事項
+
+- 若微信改版大幅更動 `AlbumPreviewUI` / `ImagePreviewUI` 結構，可開啟「診斷日誌」回報日誌以便更新。
+- 朋友圈「發影片」若走內建拍攝頁而非相簿 Activity，不會被替換為 Google 相簿；部分朋友圈影片流程需額外 `KMMSightExtInfo` 物件，主要適用情境為聊天傳圖／影片與掃一掃。
+- 大容量雲端影片需要先等 Google 相簿下載串流並複製進微信目錄，過程會顯示「正在匯入」遮罩。
+
+---
+
+## 自行建置
+
+需要 JDK 17+ 與 Android SDK 35：
 
 ```bash
-# 已安裝 SDK 時
 echo "sdk.dir=$ANDROID_HOME" > local.properties
-./gradlew assembleDebug testDebugUnitTest
+./gradlew testDebugUnitTest assembleDebug
 ```
 
-APK：`app/build/outputs/apk/debug/app-debug.apk`。倉庫裡的 `dist/WeChatSysPicker-debug.apk` 是同一份 debug 包，若有成功編過。
+編譯產物位於 `app/build/outputs/apk/debug/app-debug.apk`。
 
-Xposed API 只做編譯期依賴，不會打進 APK：
+---
 
-- `app/libs/api-82.jar`
-- 來源：<https://github.com/rovo89/XposedBridge/tree/gh-pages/de/robv/android/xposed/api/82>（Apache-2.0）
-- 若 jar 遺失，可從該路徑的 `api-82.jar` 放回 `app/libs/`。
+## English Guide
 
-DexKit `org.luckypray:dexkit:2.3.0`（LGPL-3.0）用來在微信 APK 裡找改名後的相簿類，失敗時仍會攔截字面上的 `AlbumPreviewUI`。只打包 `arm64-v8a` 與 `armeabi-v7a`。
+> **Credit:** Grok, Gemini | **Idea:** Jacky
 
-## English
+**WeChat Google Photos Picker** (`io.github.Jackyhu32.wechat.picker`) is an LSPosed / Xposed module scoped exclusively to WeChat (`com.tencent.mm`). On Mainland China HyperOS devices where `mediaprovider/allowed_cloud_providers` is locked to `com.miui.gallery`, this module lets you pick cloud photos and videos directly from **Google Photos** (`com.google.android.apps.photos/.picker.external.ExternalPickerActivity`) inside WeChat—without modifying system whitelists or reading chats/credentials.
 
-LSPosed module (`io.github.Jackyhu32.wechat.picker`), scoped only to `com.tencent.mm`. WeChat 8.0.79 opens `AlbumPreviewUI` with `startActivity` (`rc=-1`). The stock album stays on screen. The floating「Google 相簿」button launches Google Photos `ExternalPickerActivity` with `ACTION_GET_CONTENT` (`image/*` and/or `video/*` from `query_media_type`, `EXTRA_ALLOW_MULTIPLE` when multi-select). `ACTION_PICK_IMAGES` / `HyperMainActivity` runs only if that component fails to start.
+### Features (v1.3.2)
+- **Direct Picker & Floating Entry**: Hooks `AlbumPreviewUI` (with DexKit fallback for obfuscated gallery classes) and injects a floating「Google 相簿」button when WeChat opens the album with `rc=-1`.
+- **Full Video & Image Preview**: Extracts JPEG thumbnails, duration, orientation-corrected dimensions, and MIME types for picked videos, seeds WeChat's `GalleryCore` and `preview_media_item_list`, and lands on `ImagePreviewUI` without auto-sending.
+- **WeChat Scan (QR Code) Support**: Detects Scan/OCR callers and populates `Intent.setData` for WeChat's `AsyncObtainImage` so QR codes from Google Photos decode directly.
+- **Format Handling**: Converts HEIC/HEIF to JPEG; keeps GIF/PNG/WebP intact; copies cloud streams to WeChat's `syspicker/` cache (auto-cleans files older than 3 days).
+- **Built-in Log Recorder**: Toggle background diagnostic logging right inside the module app to copy or share logs without ADB.
 
-CN HyperOS rewrites `mediaprovider/allowed_cloud_providers` to `com.miui.gallery` via `com.miui.securitycenter`, so Google Photos cannot be the system picker's cloud provider. This module does not patch that whitelist and does not install an international gallery.
+### Installation & Setup
+1. Install `WeChatSysPicker-debug.apk` from [Releases](https://github.com/Jackyhu32/wechat-google-photos-picker/releases).
+2. Open **LSPosed / Vector** → **Modules** → enable **微信系統相簿** → select **only `com.tencent.mm`** in Scope (do **not** check System Framework, Google Photos, or `com.android.photopicker`).
+3. **Force stop WeChat** from Android Settings.
+4. Open the **微信系統相簿** app to verify `LSPosed 已接管設定檔` and customize toggles if needed.
+5. In WeChat, open the album (in chat or Scan) and tap the blue「Google 相簿」button to pick photos or videos.
 
-Picked `content://` URIs are copied by `MediaImporter`. The module seeds the album's string and `MediaItem` lists, then opens `ImagePreviewUI` with `preview_image_list` and `CropImage_OutputPath_List`. It does not tap 发送 and does not call the confirm method that sends the message. The user edits on that screen and taps send. Logcat `delivery=image-preview` means the preview is waiting. LSPosed scope must stay **`com.tencent.mm` only**. Target phone: Redmi K100 Pro Max, WeChat **8.0.79 (versionCode 3182)**. The module does not read chats, credentials, or payments.
+### Build from Source
+```bash
+echo "sdk.dir=$ANDROID_HOME" > local.properties
+./gradlew testDebugUnitTest assembleDebug
+```
