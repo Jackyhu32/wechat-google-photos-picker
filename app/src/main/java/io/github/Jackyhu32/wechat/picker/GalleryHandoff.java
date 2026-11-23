@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Parcelable;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -22,14 +23,18 @@ import java.util.Locale;
  *
  * <ul>
  *   <li>For Scan (掃一掃) / OCR / single-select non-chat callers, returns the selection
- *       directly to the caller via {@code setResult(RESULT_OK, selection) + finish()}.</li>
- *   <li>For Chat / Moments multi-select, seeds the album lists with properly typed
- *       {@code MediaItem}s (including {@code VideoMediaItem} metadata) and opens
+ *       directly to the caller via {@code setResult(RESULT_OK, selection) + finish()}
+ *       with {@code intent.getData()} populated for {@code AsyncObtainImage}.</li>
+ *   <li>For Chat / Moments multi-select, constructs genuine {@code GalleryItem$MediaItem}
+ *       ({@code ImageMediaItem} / {@code VideoMediaItem}) instances, seeds WeChat's
+ *       {@code GalleryCore} cache and {@code preview_media_item_list} extra, and opens
  *       {@code ImagePreviewUI} so the user can review and tap send.</li>
  * </ul>
  */
 public final class GalleryHandoff {
     static final int PREVIEW_REQUEST = 0x5F12;
+    static final String EXTRA_PREVIEW_MEDIA_ITEMS = "preview_media_item_list";
+    static final String EXTRA_PREVIEW_ALL = "preview_all";
 
     private static final String[] STALE_RESULT_KEYS = {
             WeChatResultContract.CROP_LIST,
@@ -41,6 +46,8 @@ public final class GalleryHandoff {
             WeChatResultContract.SIGHT_PATH,
             WeChatResultContract.SIGHT_THUMB,
             WeChatResultContract.SIGHT_MD5,
+            EXTRA_PREVIEW_MEDIA_ITEMS,
+            EXTRA_PREVIEW_ALL,
             "key_select_image_list",
             "isPreviewPhoto",
             ResultIntents.RESULT_MARKER
@@ -86,7 +93,8 @@ public final class GalleryHandoff {
                 + " scanExtra=" + hasScanExtra
                 + " chat=" + hasChatTarget
                 + " max=" + maxCount
-                + " videos=" + (videos == null ? 0 : videos.size()));
+                + " videos=" + (videos == null ? 0 : videos.size())
+                + " dataUri=" + selection.getData());
 
         if (mode == DeliveryPolicy.Mode.DIRECT_RESULT) {
             Intent direct = new Intent(selection);
@@ -184,6 +192,14 @@ public final class GalleryHandoff {
         if (plan.previewPaths.isEmpty()) {
             return false;
         }
+
+        // Build genuine GalleryItem$MediaItem objects and seed WeChat's GalleryCore
+        // (p0.p(list) + p0.m()) BEFORE launching ImagePreviewUI, matching AlbumPreviewUI.G8().
+        ArrayList<Parcelable> parcelableItems = buildPreviewMediaItems(album.getClassLoader(), plan);
+        if (!parcelableItems.isEmpty()) {
+            GalleryCoreBridge.seed(album.getClassLoader(), parcelableItems);
+        }
+
         Intent preview = new Intent();
         preview.setClassName("com.tencent.mm", PreviewPlan.CLASS_NAME);
         if (album.getIntent() != null && album.getIntent().getExtras() != null) {
@@ -192,6 +208,10 @@ public final class GalleryHandoff {
         clearStaleResultExtras(preview);
         preview.putExtras(selection);
         preview.putStringArrayListExtra(WeChatResultContract.PREVIEW_LIST, new ArrayList<>(plan.previewPaths));
+        if (!parcelableItems.isEmpty()) {
+            preview.putParcelableArrayListExtra(EXTRA_PREVIEW_MEDIA_ITEMS, parcelableItems);
+        }
+        preview.putExtra(EXTRA_PREVIEW_ALL, false);
         if (!plan.images.isEmpty()) {
             preview.putStringArrayListExtra("key_select_image_list", new ArrayList<>(plan.images));
         }
@@ -207,6 +227,7 @@ public final class GalleryHandoff {
             Logx.i("delivery opened " + PreviewPlan.CLASS_NAME
                     + " images=" + plan.images.size()
                     + " videos=" + plan.videos.size()
+                    + " mediaItems=" + parcelableItems.size()
                     + " isPreviewPhoto=" + plan.isPreviewPhoto
                     + " waiting for user send");
             return true;
@@ -214,6 +235,34 @@ public final class GalleryHandoff {
             Logx.i("delivery image-preview failed: " + t);
             return false;
         }
+    }
+
+    private static ArrayList<Parcelable> buildPreviewMediaItems(ClassLoader loader, PreviewPlan plan) {
+        ArrayList<Parcelable> items = new ArrayList<>();
+        if (loader == null || plan == null) {
+            return items;
+        }
+        Class<?> itemClass = null;
+        try {
+            itemClass = Class.forName(MediaItemHook.MEDIA_ITEM_CLASS, false, loader);
+        } catch (Throwable t) {
+            Logx.i("could not load GalleryItem$MediaItem: " + t);
+            return items;
+        }
+        MediaItemHook.ensureHooked(itemClass);
+        for (String path : plan.images) {
+            Object item = newMediaItem(itemClass, path, false);
+            if (item instanceof Parcelable) {
+                items.add((Parcelable) item);
+            }
+        }
+        for (String path : plan.videos) {
+            Object item = newMediaItem(itemClass, path, true);
+            if (item instanceof Parcelable) {
+                items.add((Parcelable) item);
+            }
+        }
+        return items;
     }
 
     static int seedSelection(Activity activity, Intent selection) {

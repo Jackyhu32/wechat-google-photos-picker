@@ -18,8 +18,8 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * Adds renamed gallery activities to the match set. The literal {@code AlbumPreviewUI}
- * hook still works when this scan fails.
+ * Adds renamed gallery activities to the match set and locates WeChat's obfuscated
+ * {@code GalleryCore} singleton so {@link GalleryCoreBridge} can seed {@code VideoMediaItem}s.
  */
 public final class DexKitGalleryFinder {
     private static volatile boolean nativeLoaded;
@@ -50,8 +50,33 @@ public final class DexKitGalleryFinder {
                             "max_select_count"
                     )))));
             Logx.i("dexkit gallery classes added " + added + ", set size " + into.size());
+
+            discoverGalleryCore(bridge);
         } catch (Throwable t) {
             Logx.i("dexkit discover failed: " + t);
+        }
+    }
+
+    private static void discoverGalleryCore(DexKitBridge bridge) {
+        try {
+            Iterable<ClassData> matches = bridge.findClass(FindClass.create().matcher(
+                    ClassMatcher.create().usingEqStrings(Arrays.asList(
+                            "MicroMsg.GalleryCore",
+                            "stopServices: finish."
+                    ))
+            ));
+            if (matches != null) {
+                for (ClassData data : matches) {
+                    String name = data.getName();
+                    if (name != null && !name.isEmpty()) {
+                        GalleryCoreBridge.setClassName(name);
+                        return;
+                    }
+                }
+            }
+            Logx.i("dexkit gallery core not found");
+        } catch (Throwable t) {
+            Logx.i("dexkit gallery core scan failed: " + t);
         }
     }
 

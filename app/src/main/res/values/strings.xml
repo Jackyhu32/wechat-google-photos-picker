@@ -11,6 +11,13 @@
     <string name="switch_button_hint">微信改版導致攔截失敗時，相簿底部會多一顆按鈕，點了一樣開啟 Google 相簿。</string>
     <string name="switch_raw">回傳時標記為原圖</string>
     <string name="switch_raw_hint">略過微信相簿裡的「原圖」勾選。開啟後，結果會帶 send_raw_img，並把壓縮標記關掉。</string>
+    <string name="log_title">診斷日誌</string>
+    <string name="switch_log">開啟背景自動記錄日誌</string>
+    <string name="switch_log_hint">開啟後，模組在微信裡執行選圖、影片預覽與掃一掃的關鍵步驟會自動記到這裡，不必接電腦抓 logcat。</string>
+    <string name="log_copy">複製日誌</string>
+    <string name="log_share">分享日誌</string>
+    <string name="log_clear">清除</string>
+    <string name="log_empty">目前尚無日誌。開啟上方開關後，回到微信操作一次再切回此頁即可看到紀錄。</string>
     <string name="help_title">直接開啟 Google 相簿</string>
     <string name="help_body">大陸版 HyperOS 會把系統相片選擇器的雲端媒體白名單改成小米相簿（com.miui.gallery），Google 相簿不會出現在 HyperMainActivity 裡。\n1. 安裝並登入 Google 相簿，開啟備份。\n2. 在 LSPosed 啟用本模組，作用域只勾 com.tencent.mm，然後強制停止微信。不要勾系統框架、Google 相簿或 com.android.photopicker。\n3. 在微信裡選照片。應出現 Google 相簿的選圖畫面，而不是 HyperOS 相片選擇器。選完後檔案會複製到微信自己的目錄。</string>
     <string name="status_ready">LSPosed 已接管設定檔。下次打開微信相簿就會套用，不必重開手機。</string>
